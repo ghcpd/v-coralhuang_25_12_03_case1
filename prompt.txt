@@ -1,0 +1,163 @@
+**Refactor & Extend the User Display Module — High-Performance, Modular, Extensible**
+
+The provided `input.py` is the baseline implementation.
+Your task is to redesign it into a fast, modular, extensible system while preserving the original public API.
+
+---
+
+# **1. Existing Problems**
+
+### **Performance Issues**
+
+* String concatenation inside loops (O(n²))
+* Artificial delays using `time.sleep`
+* Linear ID lookup (O(n))
+* Excessive temporary string allocations
+* Slow display/export operations
+
+### **Architecture Issues**
+
+* Single-file monolithic design
+* No separation of concerns
+* High cyclomatic complexity
+* No reusable components or configuration layer
+
+### **Reliability Issues**
+
+* Missing keys cause runtime crashes
+* No validation or error handling
+* No centralized logging
+* No recovery behavior for malformed records
+
+### **Extensibility Limitations**
+
+* Output formatting fixed
+* Filtering logic hard-coded
+* No abstraction for storage/indexes
+* No caching, metrics, or concurrent reads
+
+---
+
+# **2. Required Improvements**
+
+## **2.1 Performance**
+
+* Remove delays
+* Replace string concatenation with buffered `join`
+* O(1) ID lookup via index map
+* Linear operations with minimal allocations
+* Handle 1k–10k users efficiently
+
+## **2.2 Modular Package Structure**
+
+Example package layout:
+
+```
+user_display/
+    __init__.py
+    store.py
+    formatters.py
+    filters.py
+    config.py
+    logging_utils.py
+    metrics.py
+    errors.py
+```
+
+Responsibilities:
+
+* **UserStore**: indexing, lookup, filtering, iteration, snapshotting, thread-safe reads
+* **formatters**: compact / verbose / JSON-like; field include/exclude
+* **filters**: pluggable strategy-based filtering
+* **config**: default behavior (formatter, case rules, caching, etc.)
+* **logging_utils**: unified logger with `[MARKER]`
+* **metrics**: counters for operations, cache hits/misses, validation errors
+
+## **2.3 New Features**
+
+* Multiple output formatting profiles
+* Optional field-selection
+* Extensible filtering strategies
+* Pluggable validation logic
+* Optional caching for repeated filters
+* Snapshot/clone support in `UserStore`
+* Graceful recovery from malformed records
+
+## **2.4 API Compatibility**
+
+`user_display_optimized.py` must expose the same functions as the baseline:
+
+* `display_users(...)`
+* `get_user_by_id(...)`
+* `filter_users(...)`
+* `export_users_to_string(...)`
+
+Internally, these must rely on the new modular architecture.
+
+## **2.5 Testing Requirements**
+
+Tests must cover:
+
+* Formatting modes
+* Field-selection behavior
+* Multi-criteria filtering
+* Case sensitivity control
+* ID lookup (valid/invalid)
+* Malformed input handling (must not crash)
+* Logging with `[MARKER]`
+* Metrics behavior
+* Basic concurrency (multiple readers)
+* Performance sanity checks for 1k–10k users
+
+---
+
+# **3. Expected Deliverables**
+
+## **3.1 Code**
+
+* `user_display_original.py` (unaltered baseline)
+* `user_display_optimized.py` (compatibility wrapper)
+* Full package:
+
+  * `store.py`, `formatters.py`, `filters.py`,
+    `config.py`, `logging_utils.py`, `metrics.py`, `errors.py`
+
+## **3.2 Tests**
+
+Located in `tests/`:
+
+* Functional tests
+* Robustness tests
+* Concurrency tests
+* Performance tests
+
+## **3.3 Supporting Files**
+
+* `requirements.txt` (minimal, pinned)
+* `README.md` describing:
+
+  * baseline issues
+  * new architecture
+  * features
+  * usage examples
+  * performance comparison
+
+## **3.4 One-Click Test Script**
+
+You must include a minimal script named **`run_tests`** (or `run_tests.sh` / `run_tests.ps1`).
+This script should:
+
+* Create or activate the environment
+* Run all tests in `tests/`
+* Print results clearly
+
+---
+
+# **Performance Targets**
+
+| Operation     | Target  |
+| ------------- | ------- |
+| Display 1,000 | < 100ms |
+| Filter 1,000  | < 10ms  |
+| Lookup by ID  | < 1ms   |
+

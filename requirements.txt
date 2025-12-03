@@ -1,0 +1,7 @@
+# User Display Module - Requirements
+
+# No external dependencies required for core functionality
+# All modules use only Python standard library
+
+# For development and testing only:
+# (Not required for production use)

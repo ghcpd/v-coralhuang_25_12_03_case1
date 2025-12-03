@@ -1,74 +1,71 @@
-"""Metrics collection for the user_display module."""
+"""Metrics tracking for user display operations."""
 
-from .config import Config
+from threading import Lock
+from typing import Dict, Any
 
 
 class Metrics:
-    """Collect and track operation metrics."""
-
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
+    """Thread-safe metrics collection."""
 
     def __init__(self):
-        if self._initialized:
-            return
+        self._counters: Dict[str, int] = {}
+        self._timings: Dict[str, float] = {}
+        self._lock = Lock()
 
-        self._initialized = True
-        self.counters = {
-            "display_operations": 0,
-            "filter_operations": 0,
-            "lookup_operations": 0,
-            "export_operations": 0,
-            "validation_errors": 0,
-            "cache_hits": 0,
-            "cache_misses": 0,
-            "malformed_records": 0,
-        }
-        self.timings = {}
-
-    def increment(self, counter, amount=1):
+    def increment(self, key: str, value: int = 1) -> None:
         """Increment a counter."""
-        if Config.ENABLE_METRICS and counter in self.counters:
-            self.counters[counter] += amount
+        with self._lock:
+            self._counters[key] = self._counters.get(key, 0) + value
 
-    def record_timing(self, operation, duration):
-        """Record timing for an operation."""
-        if Config.ENABLE_METRICS:
-            if operation not in self.timings:
-                self.timings[operation] = []
-            self.timings[operation].append(duration)
+    def record_timing(self, key: str, value: float) -> None:
+        """Record a timing measurement."""
+        with self._lock:
+            self._timings[key] = value
 
-    def get_counter(self, counter):
+    def get_counter(self, key: str) -> int:
         """Get counter value."""
-        return self.counters.get(counter, 0)
+        with self._lock:
+            return self._counters.get(key, 0)
 
-    def get_averages(self):
-        """Get average timings."""
-        averages = {}
-        for operation, durations in self.timings.items():
-            if durations:
-                averages[operation] = sum(durations) / len(durations)
-        return averages
+    def get_timing(self, key: str) -> float:
+        """Get timing value."""
+        with self._lock:
+            return self._timings.get(key, 0.0)
 
-    def reset(self):
+    def get_all_counters(self) -> Dict[str, int]:
+        """Get all counters."""
+        with self._lock:
+            return dict(self._counters)
+
+    def get_all_timings(self) -> Dict[str, float]:
+        """Get all timings."""
+        with self._lock:
+            return dict(self._timings)
+
+    def reset(self) -> None:
         """Reset all metrics."""
-        for counter in self.counters:
-            self.counters[counter] = 0
-        self.timings.clear()
+        with self._lock:
+            self._counters.clear()
+            self._timings.clear()
 
-    def get_summary(self):
+    def get_summary(self) -> Dict[str, Any]:
         """Get a summary of all metrics."""
-        return {
-            "counters": self.counters.copy(),
-            "averages": self.get_averages(),
-        }
+        with self._lock:
+            return {
+                "counters": dict(self._counters),
+                "timings": dict(self._timings),
+            }
 
 
-def get_metrics():
+# Global metrics instance
+_metrics = Metrics()
+
+
+def get_metrics() -> Metrics:
     """Get the global metrics instance."""
-    return Metrics()
+    return _metrics
+
+
+def reset_metrics() -> None:
+    """Reset global metrics."""
+    _metrics.reset()

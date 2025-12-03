@@ -1,63 +1,61 @@
-# PowerShell script to run all tests for the user_display module
+# Run all tests for the user display module
 
-Write-Host "======================================" -ForegroundColor Green
-Write-Host "User Display Module - Test Runner" -ForegroundColor Green
-Write-Host "======================================" -ForegroundColor Green
-Write-Host ""
+param(
+    [switch]$Coverage,
+    [switch]$Verbose
+)
 
 # Get the script directory
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$testsDir = Join-Path $scriptDir "tests"
 
-# Check if tests directory exists
-if (-not (Test-Path $testsDir)) {
-    Write-Host "ERROR: tests directory not found at $testsDir" -ForegroundColor Red
+# Change to project directory
+Set-Location $scriptDir
+
+Write-Host "User Display Module - Test Suite" -ForegroundColor Cyan
+Write-Host "=================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Check if Python is available
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCmd) {
+    Write-Host "ERROR: Python not found in PATH" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "Running tests from: $testsDir" -ForegroundColor Cyan
+# Display Python version
+$pythonVersion = python --version 2>&1
+Write-Host "Using: $pythonVersion" -ForegroundColor Green
 Write-Host ""
 
-# Run all test files
-$testFiles = @(
-    "test_functional.py",
-    "test_robustness.py",
-    "test_concurrency.py",
-    "test_performance.py"
-)
+# Run tests
+Write-Host "Running test suite..." -ForegroundColor Yellow
+Write-Host ""
 
-$totalPassed = 0
-$totalFailed = 0
-$totalErrors = 0
+$testCommand = "python -m unittest discover -s tests -p 'test_*.py' -v"
 
-foreach ($testFile in $testFiles) {
-    $testPath = Join-Path $testsDir $testFile
-    
-    if (Test-Path $testPath) {
-        Write-Host "Running: $testFile" -ForegroundColor Yellow
-        Write-Host "---" -ForegroundColor Gray
-        
-        # Run the test
-        python -m pytest "$testPath" -v 2>&1 | ForEach-Object {
-            Write-Host $_
-        }
-        
-        Write-Host ""
-    } else {
-        Write-Host "WARNING: Test file not found: $testPath" -ForegroundColor Yellow
-    }
+if ($Verbose) {
+    Write-Host "Command: $testCommand" -ForegroundColor Gray
 }
 
-Write-Host "======================================" -ForegroundColor Green
-Write-Host "Test run completed" -ForegroundColor Green
-Write-Host "======================================" -ForegroundColor Green
+# Execute tests
+Invoke-Expression $testCommand
+$testResult = $LASTEXITCODE
+
 Write-Host ""
-Write-Host "To run specific test file:" -ForegroundColor Cyan
-Write-Host "  python -m pytest tests/test_functional.py -v" -ForegroundColor Gray
-Write-Host "  python -m pytest tests/test_robustness.py -v" -ForegroundColor Gray
-Write-Host "  python -m pytest tests/test_concurrency.py -v" -ForegroundColor Gray
-Write-Host "  python -m pytest tests/test_performance.py -v" -ForegroundColor Gray
+Write-Host "=================================" -ForegroundColor Cyan
+
+if ($testResult -eq 0) {
+    Write-Host "✓ All tests passed!" -ForegroundColor Green
+} else {
+    Write-Host "✗ Some tests failed" -ForegroundColor Red
+}
+
 Write-Host ""
-Write-Host "To run all tests with coverage:" -ForegroundColor Cyan
-Write-Host "  python -m pytest tests/ -v --cov=user_display" -ForegroundColor Gray
+Write-Host "Test files:" -ForegroundColor Cyan
+Write-Host "  - tests/test_functional.py    (Formatting, filtering, storage)"
+Write-Host "  - tests/test_robustness.py    (Error handling, edge cases)"
+Write-Host "  - tests/test_performance.py   (Performance targets validation)"
+Write-Host "  - tests/test_concurrency.py   (Thread-safety, concurrent access)"
 Write-Host ""
+
+exit $testResult

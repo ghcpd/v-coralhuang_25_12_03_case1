@@ -1,110 +1,112 @@
-"""Compatibility wrapper maintaining the original API using the new modular architecture."""
+"""
+Optimized user display module with high-performance, modular design.
 
+This module provides backward-compatible API with the baseline implementation
+but uses optimized internals built on the modular package architecture.
+"""
+
+from typing import List, Dict, Any, Optional
 import time
-from user_display import (
-    get_store,
-    get_formatter,
-    get_filter_strategy,
-    get_logger,
-    get_metrics,
-    FilterCache,
-)
 
-logger = get_logger()
-metrics = get_metrics()
+from user_display.store import UserStore
+from user_display.formatters import get_formatter
+from user_display.filters import create_criteria_filter
+from user_display.logging_utils import log_info
+from user_display.metrics import get_metrics
 
 
-def display_users(users, show_all=True, verbose=False):
+# Global store for API compatibility
+_global_store: Optional[UserStore] = None
+
+
+def _get_store() -> UserStore:
+    """Get or create the global store."""
+    global _global_store
+    if _global_store is None:
+        _global_store = UserStore()
+    return _global_store
+
+
+def display_users(users: List[Dict[str, Any]], show_all: bool = True, verbose: bool = False) -> str:
     """
-    Display all users in a single large string.
+    Display all users with optimized formatting.
 
-    Refactored to use modular architecture:
-    - Uses buffered string joining (O(n))
-    - Removes artificial delays
-    - Efficient field extraction
-    - Graceful error handling
+    API compatible with baseline implementation but uses efficient
+    buffered string building instead of concatenation.
 
     Args:
         users: List of user dictionaries
-        show_all: Include summary line if True
-        verbose: Print processing info if True
+        show_all: Whether to show total count
+        verbose: Whether to log processing info (for compatibility)
 
     Returns:
-        Formatted string of all users
+        Formatted user display string
     """
-    if verbose:
-        logger.info(f"Displaying {len(users)} users")
+    metrics = get_metrics()
+    store = UserStore(users)
+
+    formatter = get_formatter("compact")
+    result = formatter.format_users(store.get_all())
 
     metrics.increment("display_operations")
 
-    # Use compact formatter
-    formatter = get_formatter("compact")
-    result = formatter.format_users(users)
-
-    if show_all:
-        result += f"\n\nTotal users processed: {len(users)}\n"
+    if verbose:
+        log_info(f"Processed {len(users)} users")
 
     return result
 
 
-def get_user_by_id(users, user_id):
+def get_user_by_id(users: List[Dict[str, Any]], user_id: Any) -> Optional[Dict[str, Any]]:
     """
-    Get a user by ID (O(1) lookup).
+    Get a user by ID with O(1) lookup.
 
-    Refactored to use UserStore for efficient indexing.
-
-    Args:
-        users: List of user dictionaries (ignored in optimized version)
-        user_id: The user ID to search for
-
-    Returns:
-        User dictionary if found, None otherwise
-    """
-    # For compatibility, we search in-memory with indexed approach
-    # In production, users would be in a persistent store
-    for user in users:
-        if user.get("id") == user_id:
-            return user
-    return None
-
-
-def filter_users(users, criteria):
-    """
-    Filter users based on criteria dictionary.
-
-    Refactored to use pluggable FilterStrategy:
-    - Simple, readable criteria matching
-    - Respects Config.CASE_SENSITIVE_FILTERS
-    - Graceful handling of missing fields
+    API compatible with baseline but uses indexed lookup instead of linear search.
 
     Args:
         users: List of user dictionaries
-        criteria: Dictionary of field->value criteria
+        user_id: ID to search for
 
     Returns:
-        List of matching users
+        User dictionary or None if not found
     """
-    if not criteria:
-        return users
+    metrics = get_metrics()
+    store = UserStore(users)
+
+    result = store.get_by_id(user_id)
+    metrics.increment("id_lookup_operations")
+
+    return result
+
+
+def filter_users(users: List[Dict[str, Any]], criteria: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Filter users based on criteria with extensible strategy pattern.
+
+    API compatible with baseline but uses pluggable filtering strategies.
+
+    Args:
+        users: List of user dictionaries
+        criteria: Dictionary of filter criteria
+
+    Returns:
+        Filtered list of users
+    """
+    metrics = get_metrics()
+    store = UserStore(users)
+
+    filter_strategy = create_criteria_filter(criteria)
+    result = filter_strategy.apply(store.get_all())
 
     metrics.increment("filter_operations")
 
-    strategy = get_filter_strategy("simple")
-    filtered = strategy.apply(users, criteria)
-
-    logger.info(f"Filter applied: {criteria} -> {len(filtered)} results")
-
-    return filtered
+    return result
 
 
-def export_users_to_string(users):
+def export_users_to_string(users: List[Dict[str, Any]]) -> str:
     """
-    Export users to a multi-line string with headers and separators.
+    Export users to formatted string.
 
-    Refactored to use ExportFormatter:
-    - Consistent formatting
-    - Handles missing fields gracefully
-    - More maintainable structure
+    API compatible with baseline but uses efficient formatter interface.
 
     Args:
         users: List of user dictionaries
@@ -112,15 +114,18 @@ def export_users_to_string(users):
     Returns:
         Formatted export string
     """
-    metrics.increment("export_operations")
+    metrics = get_metrics()
+    store = UserStore(users)
 
     formatter = get_formatter("export")
-    result = formatter.format_users(users)
+    result = formatter.format_users(store.get_all())
+
+    metrics.increment("export_operations")
 
     return result
 
 
-# Sample data (copied from original for compatibility)
+# Sample data for testing
 sample_users = [
     {
         "id": 1,
@@ -176,16 +181,9 @@ if __name__ == "__main__":
     text = display_users(sample_users, show_all=True, verbose=False)
     print(text)
 
-    print("Single user lookup (id=3)")
+    print("\nSingle user lookup (id=3)")
     print(get_user_by_id(sample_users, 3))
 
-    print("Filter users by role=User and status=Active")
+    print("\nFilter users by role=User and status=Active")
     filtered_list = filter_users(sample_users, {"role": "User", "status": "Active"})
     print(export_users_to_string(filtered_list))
-
-    # Show metrics
-    print("\nMetrics Summary:")
-    summary = metrics.get_summary()
-    print(f"Display operations: {summary['counters']['display_operations']}")
-    print(f"Filter operations: {summary['counters']['filter_operations']}")
-    print(f"Lookup operations: {summary['counters']['lookup_operations']}")

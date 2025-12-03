@@ -1,141 +1,148 @@
-"""Filtering strategies for user records."""
+"""Filtering strategies for user selection."""
 
-from .config import Config
-from .errors import FilterError
-from .logging_utils import get_logger
-
-logger = get_logger()
+from typing import List, Dict, Any, Callable, Optional
+from .config import get_config
+from .metrics import get_metrics
 
 
 class FilterStrategy:
     """Base class for filter strategies."""
 
-    def apply(self, users, criteria):
-        """Apply filter to users. Must be overridden."""
+    def apply(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply filter to users."""
         raise NotImplementedError
 
 
-class SimpleFilterStrategy(FilterStrategy):
-    """Simple exact/substring matching filter."""
+class CriteriaFilterStrategy(FilterStrategy):
+    """Filter based on simple criteria dictionary."""
 
-    def apply(self, users, criteria):
-        """Filter users based on criteria dictionary."""
-        if not criteria:
-            return users
+    def __init__(self, criteria: Dict[str, Any]):
+        self.criteria = criteria
+        self._metrics = get_metrics()
+        self._config = get_config()
 
-        filtered = []
-        case_sensitive = Config.CASE_SENSITIVE_FILTERS
+    def apply(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply criteria filter to users."""
+        result = []
 
         for user in users:
-            if self._matches(user, criteria, case_sensitive):
-                filtered.append(user)
+            if self._matches_criteria(user):
+                result.append(user)
 
-        return filtered
+        self._metrics.increment("filter_operations")
+        return result
 
-    def _matches(self, user, criteria, case_sensitive):
-        """Check if user matches all criteria."""
-        for key, value in criteria.items():
+    def _matches_criteria(self, user: Dict[str, Any]) -> bool:
+        """Check if user matches criteria."""
+        for key, value in self.criteria.items():
             user_value = user.get(key)
 
             if user_value is None:
                 return False
 
-            if key in ("role", "status"):
-                # Exact match for categorical fields
-                if case_sensitive:
-                    if user_value != value:
-                        return False
+            # Exact match or substring based on field type
+            if isinstance(value, str) and isinstance(user_value, str):
+                # Use substring matching for name/email fields, exact for others
+                if key in ["name", "email"]:
+                    if self._config.case_sensitive_filters:
+                        if value not in user_value:
+                            return False
+                    else:
+                        if value.lower() not in user_value.lower():
+                            return False
                 else:
-                    if str(user_value).lower() != str(value).lower():
-                        return False
+                    # Exact match for role, status, etc.
+                    if self._config.case_sensitive_filters:
+                        if user_value != value:
+                            return False
+                    else:
+                        if user_value.lower() != value.lower():
+                            return False
             else:
-                # Substring match for text fields
-                user_str = str(user_value).lower() if not case_sensitive else str(user_value)
-                value_str = str(value).lower() if not case_sensitive else str(value)
-                if value_str not in user_str:
+                if user_value != value:
                     return False
 
         return True
 
 
-class AdvancedFilterStrategy(FilterStrategy):
-    """Advanced filtering with operators and callbacks."""
+class PredicateFilterStrategy(FilterStrategy):
+    """Filter based on a custom predicate function."""
 
-    def __init__(self):
-        """Initialize advanced filter strategy."""
-        self.validators = []
+    def __init__(self, predicate: Callable[[Dict[str, Any]], bool]):
+        self.predicate = predicate
+        self._metrics = get_metrics()
 
-    def add_validator(self, validator_func):
-        """Add a custom validator function."""
-        self.validators.append(validator_func)
+    def apply(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply predicate filter to users."""
+        result = []
+        errors = 0
 
-    def apply(self, users, criteria):
-        """Filter users with both simple criteria and custom validators."""
-        simple_strategy = SimpleFilterStrategy()
-        filtered = simple_strategy.apply(users, criteria)
-
-        for validator in self.validators:
+        for user in users:
             try:
-                filtered = [u for u in filtered if validator(u)]
+                if self.predicate(user):
+                    result.append(user)
             except Exception as e:
-                logger.error(f"Validator raised exception: {e}")
-                raise FilterError(f"Custom validator failed: {e}")
+                errors += 1
 
-        return filtered
+        self._metrics.increment("filter_operations")
+        if errors > 0:
+            self._metrics.increment("filter_errors", errors)
 
-
-class FilterCache:
-    """Cache filter results to avoid redundant filtering."""
-
-    def __init__(self, max_entries=None):
-        """Initialize filter cache."""
-        if max_entries is None:
-            max_entries = Config.MAX_CACHE_ENTRIES
-        self.max_entries = max_entries
-        self.cache = {}
-        self.hit_count = 0
-        self.miss_count = 0
-
-    def _make_key(self, user_ids, criteria):
-        """Create a cache key from user IDs and criteria."""
-        user_id_str = ",".join(str(uid) for uid in sorted(user_ids))
-        criteria_str = ",".join(f"{k}={v}" for k, v in sorted(criteria.items()))
-        return f"{user_id_str}|{criteria_str}"
-
-    def get(self, user_ids, criteria):
-        """Get cached result if available."""
-        if not Config.ENABLE_FILTER_CACHING:
-            return None
-
-        key = self._make_key(user_ids, criteria)
-        if key in self.cache:
-            self.hit_count += 1
-            return self.cache[key]
-        self.miss_count += 1
-        return None
-
-    def set(self, user_ids, criteria, result):
-        """Store result in cache."""
-        if not Config.ENABLE_FILTER_CACHING:
-            return
-
-        if len(self.cache) >= self.max_entries:
-            # Remove oldest entry
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-
-        key = self._make_key(user_ids, criteria)
-        self.cache[key] = result
-
-    def clear(self):
-        """Clear the cache."""
-        self.cache.clear()
-        self.hit_count = 0
-        self.miss_count = 0
+        return result
 
 
-def get_filter_strategy(strategy_type="simple"):
-    """Get a filter strategy by type."""
-    if strategy_type == "advanced":
-        return AdvancedFilterStrategy()
-    return SimpleFilterStrategy()
+class CompositeFilterStrategy(FilterStrategy):
+    """Combine multiple filters with AND logic."""
+
+    def __init__(self, *strategies: FilterStrategy):
+        self.strategies = strategies
+        self._metrics = get_metrics()
+
+    def apply(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply all filters in sequence."""
+        result = users
+        for strategy in self.strategies:
+            result = strategy.apply(result)
+        return result
+
+
+class CacheableFilterStrategy(FilterStrategy):
+    """Wrap a filter strategy with optional caching."""
+
+    def __init__(self, strategy: FilterStrategy):
+        self.strategy = strategy
+        self._cache: Dict[int, List[Dict[str, Any]]] = {}
+        self._config = get_config()
+        self._metrics = get_metrics()
+
+    def apply(self, users: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Apply filter with caching if enabled."""
+        if not self._config.enable_filter_cache:
+            return self.strategy.apply(users)
+
+        # Use list identity as cache key
+        cache_key = id(users)
+
+        if cache_key in self._cache:
+            self._metrics.increment("cache_hits")
+            return self._cache[cache_key]
+
+        result = self.strategy.apply(users)
+
+        # Manage cache size
+        if len(self._cache) >= self._config.cache_max_size:
+            # Simple eviction: remove first item
+            first_key = next(iter(self._cache))
+            del self._cache[first_key]
+
+        self._cache[cache_key] = result
+        self._metrics.increment("cache_misses")
+
+        return result
+
+
+def create_criteria_filter(criteria: Dict[str, Any]) -> FilterStrategy:
+    """Factory function to create criteria filter."""
+    if get_config().enable_filter_cache:
+        return CacheableFilterStrategy(CriteriaFilterStrategy(criteria))
+    return CriteriaFilterStrategy(criteria)

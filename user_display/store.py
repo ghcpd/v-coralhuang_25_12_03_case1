@@ -1,116 +1,135 @@
-"""User storage and indexing system."""
+"""User data storage with indexing and filtering capabilities."""
 
-import threading
-from .config import Config
-from .errors import MalformedUserError
-from .logging_utils import get_logger
+from typing import List, Dict, Any, Optional
+from threading import RLock
+import copy
+
+from .errors import InvalidUserDataError, UserNotFoundError
+from .logging_utils import log_warning, log_debug
 from .metrics import get_metrics
+from .config import get_config
 
-logger = get_logger()
-metrics = get_metrics()
+
+REQUIRED_FIELDS = {"id", "name", "email", "role", "status", "join_date", "last_login"}
 
 
 class UserStore:
-    """Thread-safe user storage with indexing and filtering capabilities."""
+    """Thread-safe user data store with indexing and filtering."""
 
-    def __init__(self):
-        """Initialize user store."""
-        self.users = []
-        self.id_index = {}  # Map user_id -> user dict for O(1) lookup
-        self.lock = threading.RLock()
-        self._validate_user_record = self._create_validator()
+    def __init__(self, users: Optional[List[Dict[str, Any]]] = None):
+        """Initialize store with optional user list."""
+        self._users: List[Dict[str, Any]] = []
+        self._id_index: Dict[Any, int] = {}  # Maps user_id to index in _users
+        self._lock = RLock()
+        self._metrics = get_metrics()
 
-    def _create_validator(self):
-        """Create a validator function for user records."""
-        def validate(user):
-            if not isinstance(user, dict):
-                raise MalformedUserError(f"User must be dict, got {type(user)}")
-            for field in Config.REQUIRED_FIELDS:
-                if field not in user:
-                    logger.warning(f"User {user.get('id', 'unknown')} missing field: {field}")
-            return True
-        return validate
+        if users:
+            self.add_users(users)
 
-    def add_user(self, user):
-        """Add a user to the store."""
-        try:
-            self._validate_user_record(user)
-        except MalformedUserError as e:
-            metrics.increment("malformed_records")
-            logger.error(f"Malformed user record: {e}")
-            raise
-
-        with self.lock:
-            # Update or insert
-            user_id = user.get("id")
-            if user_id in self.id_index:
-                # Replace existing
-                idx = next(i for i, u in enumerate(self.users) if u.get("id") == user_id)
-                self.users[idx] = user
-            else:
-                self.users.append(user)
-                self.id_index[user_id] = user
-
-    def add_users(self, users):
+    def add_users(self, users: List[Dict[str, Any]]) -> None:
         """Add multiple users to the store."""
+        config = get_config()
         for user in users:
-            try:
+            if config.skip_malformed_records:
+                try:
+                    self.add_user(user)
+                except InvalidUserDataError:
+                    log_warning(f"Skipping malformed user record: {user}")
+                    self._metrics.increment("validation_errors")
+            else:
                 self.add_user(user)
-            except MalformedUserError:
-                # Continue with next user
-                continue
 
-    def get_user_by_id(self, user_id):
-        """Get a user by ID (O(1) lookup)."""
-        metrics.increment("lookup_operations")
-        with self.lock:
-            return self.id_index.get(user_id)
+    def add_user(self, user: Dict[str, Any]) -> None:
+        """Add a single user to the store."""
+        config = get_config()
 
-    def get_all_users(self):
-        """Get all users (snapshot)."""
-        with self.lock:
-            return self.users.copy()
+        if config.validate_on_insert:
+            self._validate_user(user)
 
-    def get_user_count(self):
+        with self._lock:
+            user_id = user.get("id")
+            if user_id in self._id_index:
+                # Update existing user
+                idx = self._id_index[user_id]
+                self._users[idx] = copy.deepcopy(user)
+                self._metrics.increment("updates")
+            else:
+                # Add new user
+                self._id_index[user_id] = len(self._users)
+                self._users.append(copy.deepcopy(user))
+                self._metrics.increment("inserts")
+
+    def get_by_id(self, user_id: Any) -> Optional[Dict[str, Any]]:
+        """Get a user by ID in O(1) time."""
+        with self._lock:
+            if user_id not in self._id_index:
+                self._metrics.increment("lookups_miss")
+                return None
+
+            idx = self._id_index[user_id]
+            self._metrics.increment("lookups_hit")
+            return copy.deepcopy(self._users[idx])
+
+    def get_all(self) -> List[Dict[str, Any]]:
+        """Get all users as a copy."""
+        with self._lock:
+            return [copy.deepcopy(user) for user in self._users]
+
+    def count(self) -> int:
         """Get the number of users."""
-        with self.lock:
-            return len(self.users)
+        with self._lock:
+            return len(self._users)
 
-    def remove_user(self, user_id):
-        """Remove a user by ID."""
-        with self.lock:
-            if user_id in self.id_index:
-                user = self.id_index[user_id]
-                self.users.remove(user)
-                del self.id_index[user_id]
-                return True
-            return False
+    def snapshot(self) -> "UserStore":
+        """Create a snapshot (deep copy) of the store."""
+        with self._lock:
+            new_store = UserStore()
+            new_store._users = [copy.deepcopy(user) for user in self._users]
+            new_store._id_index = dict(self._id_index)
+            return new_store
 
-    def clear(self):
+    def filter(self, predicate) -> List[Dict[str, Any]]:
+        """Filter users based on a predicate function."""
+        with self._lock:
+            result = []
+            for user in self._users:
+                try:
+                    if predicate(user):
+                        result.append(copy.deepcopy(user))
+                except Exception as e:
+                    log_warning(f"Error evaluating predicate on user {user.get('id')}: {e}")
+                    self._metrics.increment("filter_errors")
+            return result
+
+    def _validate_user(self, user: Dict[str, Any]) -> None:
+        """Validate user data structure."""
+        if not isinstance(user, dict):
+            raise InvalidUserDataError("User must be a dictionary")
+
+        missing_fields = REQUIRED_FIELDS - set(user.keys())
+        if missing_fields:
+            raise InvalidUserDataError(f"Missing required fields: {missing_fields}")
+
+        # Validate field types
+        if not isinstance(user.get("id"), (int, str)):
+            raise InvalidUserDataError(f"Invalid ID type: {type(user.get('id'))}")
+
+        for field in ["name", "email", "role", "status", "join_date", "last_login"]:
+            if not isinstance(user.get(field), str):
+                raise InvalidUserDataError(f"Field '{field}' must be a string")
+
+    def clear(self) -> None:
         """Clear all users."""
-        with self.lock:
-            self.users.clear()
-            self.id_index.clear()
+        with self._lock:
+            self._users.clear()
+            self._id_index.clear()
 
-    def snapshot(self):
-        """Create a snapshot of current users."""
-        with self.lock:
-            return self.users.copy()
+    def __len__(self) -> int:
+        """Get the number of users."""
+        return self.count()
 
-    def iter_users(self):
-        """Iterate over users thread-safely."""
-        with self.lock:
-            for user in self.users:
-                yield user
-
-
-# Global store instance
-_global_store = None
-
-
-def get_store():
-    """Get the global user store instance."""
-    global _global_store
-    if _global_store is None:
-        _global_store = UserStore()
-    return _global_store
+    def __iter__(self):
+        """Iterate over users (thread-safe snapshot)."""
+        with self._lock:
+            users_copy = [copy.deepcopy(user) for user in self._users]
+        return iter(users_copy)

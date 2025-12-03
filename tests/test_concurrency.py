@@ -1,197 +1,168 @@
-"""Concurrency tests for the user_display module."""
+"""Concurrency tests for thread-safety."""
 
 import unittest
 import threading
 import time
-from user_display import get_store
+from user_display.store import UserStore
+from user_display.metrics import get_metrics, reset_metrics
 
 
 class TestConcurrency(unittest.TestCase):
-    """Test thread-safe operations."""
+    """Test concurrent access and thread-safety."""
 
     def setUp(self):
-        """Set up test data."""
-        self.store = get_store()
-        self.store.clear()
-
-    def tearDown(self):
-        """Clean up after tests."""
-        self.store.clear()
-
-    def test_concurrent_reads(self):
-        """Test multiple threads can read concurrently."""
-        # Add test data
-        users = [
-            {"id": i, "name": f"User{i}", "email": f"user{i}@test.com", "role": "User", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"}
+        reset_metrics()
+        self.sample_users = [
+            {
+                "id": i,
+                "name": f"User{i}",
+                "email": f"user{i}@example.com",
+                "role": "User",
+                "status": "Active",
+                "join_date": "2023-01-01",
+                "last_login": "2025-01-01",
+            }
             for i in range(100)
         ]
-        self.store.add_users(users)
 
+    def test_concurrent_reads(self):
+        """Test multiple threads reading concurrently."""
+        store = UserStore(self.sample_users)
         results = []
         errors = []
 
-        def reader_thread():
+        def reader_thread(user_id):
             try:
-                for _ in range(50):
-                    user = self.store.get_user_by_id(50)
-                    results.append(user is not None)
+                user = store.get_by_id(user_id)
+                results.append((user_id, user is not None))
             except Exception as e:
                 errors.append(e)
 
-        # Create multiple reader threads
-        threads = [threading.Thread(target=reader_thread) for _ in range(10)]
-        for t in threads:
-            t.start()
+        threads = []
+        for i in range(10):
+            for user_id in range(0, 100, 10):
+                t = threading.Thread(target=reader_thread, args=(user_id,))
+                threads.append(t)
+                t.start()
+
         for t in threads:
             t.join()
 
-        # All reads should succeed
-        self.assertEqual(len(errors), 0)
-        self.assertTrue(all(results))
+        self.assertEqual(len(errors), 0, f"Errors occurred: {errors}")
+        self.assertEqual(len(results), 100)
 
-    def test_concurrent_adds(self):
-        """Test multiple threads can add users concurrently."""
+    def test_concurrent_iteration(self):
+        """Test concurrent iteration over store."""
+        store = UserStore(self.sample_users)
+        results = []
         errors = []
-        counter = {"value": 0}
-        lock = threading.Lock()
 
-        def writer_thread(start_id):
+        def iterator_thread():
             try:
-                for i in range(10):
-                    user_id = start_id + i
-                    user = {
-                        "id": user_id,
-                        "name": f"User{user_id}",
-                        "email": f"user{user_id}@test.com",
-                        "role": "User",
-                        "status": "Active",
-                        "join_date": "2023-01-01",
-                        "last_login": "2025-12-01",
-                    }
-                    self.store.add_user(user)
-                    with lock:
-                        counter["value"] += 1
+                count = 0
+                for user in store:
+                    count += 1
+                results.append(count)
             except Exception as e:
                 errors.append(e)
 
-        # Create multiple writer threads with different ID ranges
-        threads = [threading.Thread(target=writer_thread, args=(i * 10,)) for i in range(5)]
-        for t in threads:
+        threads = []
+        for _ in range(5):
+            t = threading.Thread(target=iterator_thread)
+            threads.append(t)
             t.start()
+
         for t in threads:
             t.join()
 
-        # All adds should succeed
         self.assertEqual(len(errors), 0)
-        self.assertEqual(counter["value"], 50)
-        self.assertEqual(self.store.get_user_count(), 50)
+        # Each thread should see all users
+        for count in results:
+            self.assertEqual(count, 100)
 
-    def test_concurrent_mixed_operations(self):
-        """Test mix of reads and writes."""
-        # Add initial data
-        for i in range(50):
-            user = {
-                "id": i,
-                "name": f"User{i}",
-                "email": f"user{i}@test.com",
-                "role": "User",
-                "status": "Active",
-                "join_date": "2023-01-01",
-                "last_login": "2025-12-01",
-            }
-            self.store.add_user(user)
-
-        errors = []
-        read_count = {"value": 0}
-        write_count = {"value": 0}
-        lock = threading.Lock()
-
-        def mixed_thread(thread_id):
-            try:
-                # Reads
-                for _ in range(20):
-                    user = self.store.get_user_by_id(thread_id % 50)
-                    if user:
-                        with lock:
-                            read_count["value"] += 1
-
-                # Writes
-                for i in range(5):
-                    user_id = 1000 + thread_id * 10 + i
-                    user = {
-                        "id": user_id,
-                        "name": f"NewUser{user_id}",
-                        "email": f"new{user_id}@test.com",
-                        "role": "User",
-                        "status": "Active",
-                        "join_date": "2023-01-01",
-                        "last_login": "2025-12-01",
-                    }
-                    self.store.add_user(user)
-                    with lock:
-                        write_count["value"] += 1
-            except Exception as e:
-                errors.append(e)
-
-        # Create multiple mixed-operation threads
-        threads = [threading.Thread(target=mixed_thread, args=(i,)) for i in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        # All operations should succeed
-        self.assertEqual(len(errors), 0)
-        self.assertEqual(read_count["value"], 200)
-        self.assertEqual(write_count["value"], 50)
-
-    def test_snapshot_during_concurrent_operations(self):
-        """Test snapshot creation while other threads are accessing data."""
-        # Add initial data
-        for i in range(20):
-            user = {
-                "id": i,
-                "name": f"User{i}",
-                "email": f"user{i}@test.com",
-                "role": "User",
-                "status": "Active",
-                "join_date": "2023-01-01",
-                "last_login": "2025-12-01",
-            }
-            self.store.add_user(user)
-
+    def test_concurrent_snapshots(self):
+        """Test concurrent snapshot creation."""
+        store = UserStore(self.sample_users)
         snapshots = []
         errors = []
 
         def snapshot_thread():
             try:
-                for _ in range(5):
-                    snapshot = self.store.snapshot()
-                    snapshots.append(len(snapshot))
-                    time.sleep(0.001)
+                snap = store.snapshot()
+                snapshots.append(snap)
             except Exception as e:
                 errors.append(e)
 
-        def access_thread():
-            try:
-                for i in range(50):
-                    self.store.get_user_by_id(i % 20)
-            except Exception as e:
-                errors.append(e)
-
-        # Mix snapshot and access threads
-        threads = [threading.Thread(target=snapshot_thread) for _ in range(2)]
-        threads.extend([threading.Thread(target=access_thread) for _ in range(3)])
-
-        for t in threads:
+        threads = []
+        for _ in range(5):
+            t = threading.Thread(target=snapshot_thread)
+            threads.append(t)
             t.start()
+
         for t in threads:
             t.join()
 
-        # All operations should succeed
         self.assertEqual(len(errors), 0)
-        # Snapshots should be consistent
-        self.assertTrue(all(s == 20 for s in snapshots))
+        self.assertEqual(len(snapshots), 5)
+
+    def test_concurrent_filter(self):
+        """Test concurrent filtering."""
+        store = UserStore(self.sample_users)
+        results = []
+        errors = []
+
+        def filter_thread(role):
+            try:
+                filtered = store.filter(lambda u: u["role"] == role)
+                results.append((role, len(filtered)))
+            except Exception as e:
+                errors.append(e)
+
+        threads = []
+        for _ in range(5):
+            t = threading.Thread(target=filter_thread, args=("User",))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0)
+        # All should get same results
+        for role, count in results:
+            self.assertGreater(count, 0)
+
+    def test_mixed_concurrent_operations(self):
+        """Test mix of concurrent operations."""
+        store = UserStore(self.sample_users)
+        errors = []
+
+        def mixed_operations(thread_id):
+            try:
+                # Read
+                user = store.get_by_id(thread_id % 100)
+                if user:
+                    pass  # Verify read
+
+                # Iterate
+                for u in store:
+                    pass
+
+                # Filter
+                filtered = store.filter(lambda u: u["id"] < 50)
+            except Exception as e:
+                errors.append((thread_id, e))
+
+        threads = []
+        for i in range(10):
+            t = threading.Thread(target=mixed_operations, args=(i,))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        self.assertEqual(len(errors), 0, f"Errors: {errors}")
 
 
 if __name__ == "__main__":

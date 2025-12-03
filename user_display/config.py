@@ -1,41 +1,69 @@
-"""Configuration and defaults for the user_display module."""
+"""Configuration management for user display module."""
+
+from typing import Dict, Any, Optional
 
 
 class Config:
-    """Global configuration for user_display module."""
+    """Configuration object for user display behavior."""
 
-    # Formatter settings
-    DEFAULT_FORMATTER = "compact"
-    AVAILABLE_FORMATTERS = ("compact", "verbose", "json")
+    def __init__(self):
+        # Formatter settings
+        self.default_formatter = "compact"
+        self.include_fields = None  # None = all fields
+        self.exclude_fields = []
 
-    # Filter settings
-    CASE_SENSITIVE_FILTERS = False
-    ENABLE_FILTER_CACHING = True
-    MAX_CACHE_ENTRIES = 100
+        # Filter settings
+        self.case_sensitive_filters = False
+        self.enable_filter_cache = True
+        self.cache_max_size = 100
 
-    # Logging settings
-    LOG_MARKER = "[USER_DISPLAY]"
-    ENABLE_LOGGING = True
+        # Behavior settings
+        self.skip_malformed_records = True
+        self.validate_on_insert = True
+        self.verbose_logging = False
 
-    # Metrics settings
-    ENABLE_METRICS = True
+        # Performance settings
+        self.build_index = True
+        self.thread_safe = True
 
-    # Field settings
-    REQUIRED_FIELDS = {"id", "name", "email", "role", "status", "join_date", "last_login"}
-    OPTIONAL_FIELDS = set()
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary."""
+        return {
+            "default_formatter": self.default_formatter,
+            "include_fields": self.include_fields,
+            "exclude_fields": self.exclude_fields,
+            "case_sensitive_filters": self.case_sensitive_filters,
+            "enable_filter_cache": self.enable_filter_cache,
+            "cache_max_size": self.cache_max_size,
+            "skip_malformed_records": self.skip_malformed_records,
+            "validate_on_insert": self.validate_on_insert,
+            "verbose_logging": self.verbose_logging,
+            "build_index": self.build_index,
+            "thread_safe": self.thread_safe,
+        }
 
-    # Performance settings
-    ENABLE_INDEXING = True
-    SNAPSHOT_ON_MODIFICATION = False
+    @staticmethod
+    def default() -> "Config":
+        """Get default configuration."""
+        return Config()
 
-    @classmethod
-    def get_default_fields(cls):
-        """Get the set of fields to display by default."""
-        return cls.REQUIRED_FIELDS.copy()
 
-    @classmethod
-    def update(cls, **kwargs):
-        """Update configuration settings."""
-        for key, value in kwargs.items():
-            if hasattr(cls, key):
-                setattr(cls, key, value)
+# Global config instance
+_config = Config()
+
+
+def get_config() -> Config:
+    """Get the global config instance."""
+    return _config
+
+
+def set_config(config: Config) -> None:
+    """Set the global config instance."""
+    global _config
+    _config = config
+
+
+def reset_config() -> None:
+    """Reset to default configuration."""
+    global _config
+    _config = Config()

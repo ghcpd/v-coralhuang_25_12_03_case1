@@ -1,58 +1,44 @@
-"""Logging utilities for the user_display module."""
+"""Logging utilities with centralized marker-based logging."""
 
 import logging
-import sys
-from .config import Config
+from typing import Optional
 
 
-class ModuleLogger:
-    """Unified logger for the user_display module."""
+_logger: Optional[logging.Logger] = None
+_MARKER = "[UserDisplay]"
 
-    _instance = None
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-
-        self._initialized = True
-        self.logger = logging.getLogger("user_display")
-        self.logger.setLevel(logging.DEBUG)
-
-        if not self.logger.handlers:
-            handler = logging.StreamHandler(sys.stdout)
+def get_logger(name: str = "user_display") -> logging.Logger:
+    """Get or create the logger with standardized marker."""
+    global _logger
+    if _logger is None:
+        _logger = logging.getLogger(name)
+        if not _logger.handlers:
+            handler = logging.StreamHandler()
             formatter = logging.Formatter(
-                f"%(asctime)s - {Config.LOG_MARKER} - %(levelname)s - %(message)s"
+                f"{_MARKER} %(levelname)s - %(message)s"
             )
             handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-
-    def debug(self, message):
-        """Log debug message."""
-        if Config.ENABLE_LOGGING:
-            self.logger.debug(message)
-
-    def info(self, message):
-        """Log info message."""
-        if Config.ENABLE_LOGGING:
-            self.logger.info(message)
-
-    def warning(self, message):
-        """Log warning message."""
-        if Config.ENABLE_LOGGING:
-            self.logger.warning(message)
-
-    def error(self, message):
-        """Log error message."""
-        if Config.ENABLE_LOGGING:
-            self.logger.error(message)
+            _logger.addHandler(handler)
+            _logger.setLevel(logging.INFO)
+    return _logger
 
 
-def get_logger():
-    """Get the global module logger instance."""
-    return ModuleLogger()
+def log_info(message: str) -> None:
+    """Log an info message with marker."""
+    get_logger().info(message)
+
+
+def log_warning(message: str) -> None:
+    """Log a warning message with marker."""
+    get_logger().warning(message)
+
+
+def log_error(message: str) -> None:
+    """Log an error message with marker."""
+    get_logger().error(message)
+
+
+def log_debug(message: str) -> None:
+    """Log a debug message with marker."""
+    get_logger().debug(message)

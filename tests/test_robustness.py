@@ -1,129 +1,183 @@
-"""Robustness and error handling tests."""
+"""Robustness tests for error handling and edge cases."""
 
 import unittest
-from user_display import (
-    get_formatter,
-    get_filter_strategy,
-    get_store,
-    MalformedUserError,
-)
+from user_display.store import UserStore
+from user_display.errors import InvalidUserDataError
+from user_display.config import Config, reset_config
+from user_display.metrics import get_metrics, reset_metrics
 
 
 class TestRobustness(unittest.TestCase):
     """Test robustness and error handling."""
 
     def setUp(self):
-        """Set up test data."""
-        self.store = get_store()
-        self.store.clear()
+        reset_metrics()
+        reset_config()
 
-    def tearDown(self):
-        """Clean up after tests."""
-        self.store.clear()
+    def test_empty_store(self):
+        """Test operations on empty store."""
+        store = UserStore()
+        self.assertEqual(store.count(), 0)
+        self.assertEqual(len(store.get_all()), 0)
+        self.assertIsNone(store.get_by_id(1))
 
-    def test_missing_required_field(self):
+    def test_missing_fields(self):
         """Test handling of missing required fields."""
-        malformed_user = {"id": 1, "name": "John"}  # Missing many required fields
-        # Should log warnings but not crash
+        incomplete_user = {"id": 1, "name": "John"}  # Missing required fields
+
+        store = UserStore([incomplete_user])
+        # Should skip malformed record (default behavior)
+        self.assertEqual(store.count(), 0)
+
+    def test_invalid_field_types(self):
+        """Test handling of invalid field types."""
+        invalid_user = {
+            "id": 1,
+            "name": "John",
+            "email": "john@example.com",
+            "role": "Admin",
+            "status": "Active",
+            "join_date": ["2023-01-01"],  # Should be string
+            "last_login": "2025-01-01",
+        }
+
+        store = UserStore([invalid_user])
+        # Should skip due to invalid type
+        self.assertEqual(store.count(), 0)
+
+    def test_strict_validation_mode(self):
+        """Test strict validation mode raises exception."""
+        config = Config()
+        config.skip_malformed_records = False
+        config.validate_on_insert = True
+
+        from user_display import config as config_module
+        old_config = config_module._config
+        config_module._config = config
+
         try:
-            self.store.add_user(malformed_user)
-        except MalformedUserError:
-            # Expected if validation is strict
-            pass
+            incomplete_user = {"id": 1, "name": "John"}
+            with self.assertRaises(InvalidUserDataError):
+                UserStore([incomplete_user])
+        finally:
+            config_module._config = old_config
 
-    def test_formatter_with_missing_fields(self):
-        """Test formatter handles missing fields gracefully."""
+    def test_duplicate_user_update(self):
+        """Test updating existing user."""
+        store = UserStore()
+        user1 = {
+            "id": 1, "name": "John", "email": "john@example.com", "role": "Admin",
+            "status": "Active", "join_date": "2023-01-01", "last_login": "2025-01-01"
+        }
+        store.add_user(user1)
+
+        user1_updated = dict(user1)
+        user1_updated["name"] = "Jane"
+        store.add_user(user1_updated)
+
+        self.assertEqual(store.count(), 1)
+        retrieved = store.get_by_id(1)
+        self.assertEqual(retrieved["name"], "Jane")
+
+    def test_filter_with_error(self):
+        """Test filter handles errors gracefully."""
         users = [
-            {"id": 1, "name": "John"},  # Missing fields
+            {"id": 1, "name": "John", "email": "john@example.com", "role": "Admin",
+             "status": "Active", "join_date": "2023-01-01", "last_login": "2025-01-01"},
         ]
-        formatter = get_formatter("compact")
-        output = formatter.format_users(users)
-        self.assertIn("N/A", output)  # Default value for missing fields
 
-    def test_formatter_with_non_dict_user(self):
-        """Test formatter rejects non-dict users."""
-        users = ["not a dict"]
-        formatter = get_formatter("compact")
-        # Should not crash, should skip malformed
-        output = formatter.format_users(users)
-        self.assertTrue(isinstance(output, str))
+        store = UserStore(users)
 
-    def test_filter_with_missing_field_in_criteria(self):
-        """Test filtering when user lacks field in criteria."""
-        users = [
-            {"id": 1, "name": "John", "email": "john@test.com"},  # No role field
-            {"id": 2, "name": "Jane", "email": "jane@test.com", "role": "User"},
+        def bad_predicate(user):
+            if user["id"] == 1:
+                raise ValueError("Test error")
+            return True
+
+        result = store.filter(bad_predicate)
+        # Should handle error and continue
+        self.assertEqual(len(result), 0)
+
+    def test_metrics_error_tracking(self):
+        """Test that metrics track validation errors."""
+        reset_metrics()
+        metrics = get_metrics()
+
+        invalid_users = [
+            {"id": 1},  # Invalid
+            {"id": 2},  # Invalid
         ]
-        strategy = get_filter_strategy("simple")
-        result = strategy.apply(users, {"role": "User"})
-        # Should only match user with role field
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["id"], 2)
 
-    def test_empty_user_list(self):
-        """Test handling empty user list."""
-        formatter = get_formatter("compact")
-        output = formatter.format_users([])
-        self.assertEqual(output, "")
+        store = UserStore(invalid_users)
+        self.assertEqual(metrics.get_counter("validation_errors"), 2)
 
-    def test_empty_criteria(self):
-        """Test filtering with empty criteria."""
-        users = [
-            {"id": 1, "name": "John", "email": "john@test.com", "role": "Admin", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"},
-            {"id": 2, "name": "Jane", "email": "jane@test.com", "role": "User", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"},
-        ]
-        strategy = get_filter_strategy("simple")
-        result = strategy.apply(users, {})
-        self.assertEqual(len(result), 2)
+    def test_large_data_set(self):
+        """Test handling large datasets."""
+        users = []
+        for i in range(1000):
+            users.append({
+                "id": i,
+                "name": f"User{i}",
+                "email": f"user{i}@example.com",
+                "role": "User",
+                "status": "Active",
+                "join_date": "2023-01-01",
+                "last_login": "2025-01-01",
+            })
 
-    def test_unicode_characters(self):
-        """Test handling of unicode characters in user data."""
-        users = [
-            {"id": 1, "name": "José García", "email": "jose@test.com", "role": "User", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"},
-            {"id": 2, "name": "李明", "email": "li@test.com", "role": "User", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"},
-        ]
-        formatter = get_formatter("compact")
-        output = formatter.format_users(users)
-        self.assertIn("José", output)
-        self.assertIn("李明", output)
+        store = UserStore(users)
+        self.assertEqual(store.count(), 1000)
+
+        # Test lookup is fast
+        user = store.get_by_id(500)
+        self.assertIsNotNone(user)
+        self.assertEqual(user["name"], "User500")
 
     def test_special_characters_in_fields(self):
-        """Test handling special characters in user fields."""
+        """Test handling special characters."""
+        user = {
+            "id": 1,
+            "name": "John O'Brien",
+            "email": "john+test@example.com",
+            "role": "User",
+            "status": "Active",
+            "join_date": "2023-01-01",
+            "last_login": "2025-01-01",
+        }
+
+        store = UserStore([user])
+        retrieved = store.get_by_id(1)
+        self.assertEqual(retrieved["name"], "John O'Brien")
+        self.assertEqual(retrieved["email"], "john+test@example.com")
+
+    def test_unicode_support(self):
+        """Test handling of unicode characters."""
+        user = {
+            "id": 1,
+            "name": "João Silva",
+            "email": "joao@example.com",
+            "role": "User",
+            "status": "Ativo",
+            "join_date": "2023-01-01",
+            "last_login": "2025-01-01",
+        }
+
+        store = UserStore([user])
+        retrieved = store.get_by_id(1)
+        self.assertEqual(retrieved["name"], "João Silva")
+
+    def test_clear_store(self):
+        """Test clearing the store."""
         users = [
-            {"id": 1, "name": "O'Brien | Special", "email": "user+test@example.com", "role": "User", "status": "Active", "join_date": "2023-01-01", "last_login": "2025-12-01"},
+            {"id": i, "name": f"User{i}", "email": f"user{i}@example.com", "role": "User",
+             "status": "Active", "join_date": "2023-01-01", "last_login": "2025-01-01"}
+            for i in range(10)
         ]
-        formatter = get_formatter("compact")
-        output = formatter.format_users(users)
-        self.assertIn("O'Brien", output)
-        self.assertIn("+test", output)
 
+        store = UserStore(users)
+        self.assertEqual(store.count(), 10)
 
-class TestMetrics(unittest.TestCase):
-    """Test metrics tracking."""
-
-    def setUp(self):
-        """Set up test data."""
-        from user_display import get_metrics
-        self.metrics = get_metrics()
-        self.metrics.reset()
-
-    def test_metrics_initialization(self):
-        """Test metrics are initialized correctly."""
-        summary = self.metrics.get_summary()
-        self.assertIn("counters", summary)
-        self.assertIn("display_operations", summary["counters"])
-        self.assertEqual(summary["counters"]["display_operations"], 0)
-
-    def test_metrics_increments(self):
-        """Test metrics can be incremented."""
-        self.metrics.increment("display_operations", 5)
-        self.assertEqual(self.metrics.get_counter("display_operations"), 5)
-
-    def test_metrics_reset(self):
-        """Test metrics can be reset."""
-        self.metrics.increment("display_operations", 10)
-        self.metrics.reset()
-        self.assertEqual(self.metrics.get_counter("display_operations"), 0)
+        store.clear()
+        self.assertEqual(store.count(), 0)
 
 
 if __name__ == "__main__":

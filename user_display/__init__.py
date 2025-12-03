@@ -1,29 +1,30 @@
-"""User display module - high-performance, modular, extensible."""
+"""User display package - high-performance, modular, extensible user management."""
 
-from .store import UserStore, get_store
-from .formatters import get_formatter, CompactFormatter, VerboseFormatter, JSONFormatter, ExportFormatter
-from .filters import get_filter_strategy, FilterCache
-from .config import Config
+from .store import UserStore
+from .formatters import Formatter, get_formatter
+from .filters import FilterStrategy, create_criteria_filter
+from .config import Config, get_config, set_config, reset_config
 from .logging_utils import get_logger
-from .metrics import get_metrics
-from .errors import UserDisplayError, MalformedUserError, ValidationError, FilterError
+from .metrics import get_metrics, reset_metrics
+from .errors import UserDisplayError, UserNotFoundError, InvalidUserDataError, ValidationError
 
-__version__ = "2.0.0"
 __all__ = [
     "UserStore",
-    "get_store",
+    "Formatter",
     "get_formatter",
-    "CompactFormatter",
-    "VerboseFormatter",
-    "JSONFormatter",
-    "ExportFormatter",
-    "get_filter_strategy",
-    "FilterCache",
+    "FilterStrategy",
+    "create_criteria_filter",
     "Config",
+    "get_config",
+    "set_config",
+    "reset_config",
     "get_logger",
     "get_metrics",
+    "reset_metrics",
     "UserDisplayError",
-    "MalformedUserError",
+    "UserNotFoundError",
+    "InvalidUserDataError",
     "ValidationError",
-    "FilterError",
 ]
+
+__version__ = "1.0.0"

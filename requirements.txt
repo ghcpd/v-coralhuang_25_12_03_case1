@@ -1,1 +1,5 @@
-# Minimal dependencies for the user_display module
+# User Display Module - Python 3.8+
+# Minimal dependencies for core functionality
+
+# No external dependencies required for core module
+# All code uses Python standard library only

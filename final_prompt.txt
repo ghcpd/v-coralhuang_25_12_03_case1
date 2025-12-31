@@ -1,0 +1,51 @@
+**Refactor & Extend the User Display Module — High-Performance, Modular, Extensible**
+
+The provided `input.py` is the baseline implementation.
+Your task is to redesign it into a fast, modular, extensible system while preserving the original public API.
+
+---
+
+# **1. Existing Problems**
+
+### **Performance Issues**
+
+* String concatenation inside loops (O(n²))
+* Artificial delays using `time.sleep`
+* Linear ID lookup (O(n))
+* Excessive temporary string allocations
+* Slow display/export operations
+
+### **Architecture Issues**
+
+* Single-file monolithic design
+* No separation of concerns
+* High cyclomatic complexity
+* No reusable components or configuration layer
+
+### **Reliability Issues**
+
+* Missing keys cause runtime crashes
+* No validation or error handling
+* No centralized logging
+* No recovery behavior for malformed records
+
+### **Extensibility Limitations**
+
+* Output formatting fixed
+* Filtering logic hard-coded
+* No abstraction for storage/indexes
+* No caching, metrics, or concurrent reads
+
+---
+
+# **2. Required Improvements**
+
+## **2.1 Performance**
+
+* Remove delays
+* Replace string concatenation with buffered `join`
+* O(1) ID lookup via index map
+* Linear operations with minimal allocations
+* Handle 1k–10k users efficiently
+
+## **2.2 Modular Package Structure**
